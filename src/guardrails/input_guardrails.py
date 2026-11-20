@@ -11,6 +11,7 @@ Status convention (không dùng True/False mơ hồ):
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Literal
 
 from google.genai import types
@@ -51,14 +52,21 @@ def detect_injection(user_input: str) -> InputStatus:
     Returns:
         ``"BLOCK"`` if injection detected (chặn), ``"ALLOW"`` otherwise (cho qua).
     """
+    text = unicodedata.normalize("NFKC", user_input or "")
+    text = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]", "", text)
+    text = re.sub(r"\s+", " ", text).strip().lower()
     INJECTION_PATTERNS = [
-        # TODO: Add at least 5 regex patterns
-        # Example:
-        # r"ignore (all )?(previous|above) instructions",
+        r"\bignore\s+(?:all\s+)?(?:previous|above|prior|earlier)\s+instructions?\b",
+        r"\byou\s+are\s+now\b",
+        r"\b(?:reveal|show|print|extract| disclose)\b.{0,60}\b(?:system\s+prompt|hidden\s+instructions?|developer\s+message)\b",
+        r"\b(?:system\s+prompt|hidden\s+instructions?)\b.{0,60}\b(?:reveal|show|dump|repeat|extract)\b",
+        r"\bpretend\s+you\s+are\b|\bact\s+as\s+(?:an?\s+)?(?:unrestricted|jailbroken|dan)\b",
+        r"\b(?:jailbreak|unrestricted\s+mode|developer\s+mode|do\s+anything\s+now)\b",
+        r"\b(?:admin|system|developer)\s+(?:override|authorization|instruction)\b",
     ]
 
     for pattern in INJECTION_PATTERNS:
-        if re.search(pattern, user_input, re.IGNORECASE):
+        if re.search(pattern, text, re.IGNORECASE):
             return "BLOCK"
     return "ALLOW"
 
@@ -84,14 +92,14 @@ def topic_filter(user_input: str) -> InputStatus:
         ``"BLOCK"`` = chặn (off-topic hoặc topic cấm).
         ``"ALLOW"`` = cho qua (câu banking hợp lệ).
     """
-    input_lower = user_input.lower()
+    input_lower = unicodedata.normalize("NFKC", user_input or "").lower()
 
-    # TODO: Implement logic:
-    # 1. If input contains any blocked topic -> return "BLOCK"
-    # 2. If input doesn't contain any allowed topic -> return "BLOCK"
-    # 3. Otherwise -> return "ALLOW"
-
-    pass  # Replace with your implementation
+    tokens = re.findall(r"[\wÀ-ỹ]+", input_lower)
+    blocked = {x.lower() for x in BLOCKED_TOPICS}
+    allowed = {x.lower() for x in ALLOWED_TOPICS}
+    if any(term in input_lower if " " in term else term in tokens for term in blocked):
+        return "BLOCK"
+    return "ALLOW" if any(term in input_lower if " " in term else term in tokens for term in allowed) else "BLOCK"
 
 
 # ============================================================
@@ -151,7 +159,13 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
         #    - If "BLOCK": increment blocked_count, return self._block_response("...")
         # 3. If both return "ALLOW": return None (let message through)
 
-        pass  # Replace with your implementation
+        if detect_injection(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response("I can’t help with requests to bypass safety controls or reveal internal instructions.")
+        if topic_filter(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response("I can only help with VinBank banking questions.")
+        return None
 
 
 # ============================================================
